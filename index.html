@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0d0d1a">
+  <title>Осветление</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, Arial, sans-serif;
+      background: #0d0d1a;
+      color: white;
+      min-height: 100vh;
+      padding: 20px;
+      padding-top: env(safe-area-inset-top, 20px);
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 26px;
+      margin-bottom: 6px;
+      color: #ffffff;
+      letter-spacing: 1px;
+    }
+
+    #status {
+      text-align: center;
+      font-size: 13px;
+      margin-bottom: 28px;
+      color: #666;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    #dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #666;
+      display: inline-block;
+    }
+    #dot.ok  { background: #4CAF50; box-shadow: 0 0 6px #4CAF50; }
+    #dot.err { background: #f44336; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      max-width: 420px;
+      margin: 0 auto 20px;
+    }
+
+    .card {
+      background: #16213e;
+      border-radius: 18px;
+      padding: 22px 16px;
+      text-align: center;
+      border: 2px solid #1a2a4a;
+      cursor: pointer;
+      transition: all 0.25s ease;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .card:active { transform: scale(0.96); }
+
+    .card.on {
+      background: #1a3a6e;
+      border-color: #4a9eff;
+      box-shadow: 0 0 25px rgba(74,158,255,0.2);
+    }
+
+    .icon {
+      font-size: 42px;
+      margin-bottom: 10px;
+      transition: filter 0.25s;
+    }
+    .card.on .icon { filter: drop-shadow(0 0 8px #ffe066); }
+
+    .label {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 14px;
+      color: #ccc;
+    }
+    .card.on .label { color: #fff; }
+
+    .toggle {
+      width: 54px; height: 28px;
+      background: #2a2a3a;
+      border-radius: 14px;
+      margin: 0 auto;
+      position: relative;
+      transition: background 0.25s;
+    }
+    .toggle.on { background: #4CAF50; }
+    .toggle::after {
+      content: '';
+      position: absolute;
+      width: 22px; height: 22px;
+      background: white;
+      border-radius: 50%;
+      top: 3px; left: 3px;
+      transition: left 0.25s;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+    }
+    .toggle.on::after { left: 29px; }
+
+    .state-text {
+      font-size: 12px;
+      margin-top: 8px;
+      color: #666;
+    }
+    .card.on .state-text { color: #4CAF50; }
+
+    .all-buttons {
+      display: flex;
+      gap: 12px;
+      max-width: 420px;
+      margin: 0 auto;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 16px;
+      border: none;
+      border-radius: 14px;
+      font-size: 15px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: transform 0.15s, opacity 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn:active { transform: scale(0.96); opacity: 0.85; }
+    .btn-on  { background: linear-gradient(135deg, #4CAF50, #2e7d32); color: white; }
+    .btn-off { background: linear-gradient(135deg, #f44336, #b71c1c); color: white; }
+  </style>
+</head>
+<body>
+
+<h1>💡 Осветление</h1>
+<div id="status">
+  <span id="dot"></span>
+  <span id="status-text">Свързване...</span>
+</div>
+
+<div class="grid" id="grid"></div>
+
+<div class="all-buttons">
+  <button class="btn btn-on"  onclick="allOn()">⚡ Всички ВКЛ</button>
+  <button class="btn btn-off" onclick="allOff()">🌙 Всички ИЗК</button>
+</div>
+
+<script>
+  // ===== НАСТРОЙКИ =====
+  const MQTT_URL  = "wss://9c6e656f7bc040d7a9294add2ec8ec66.s1.eu.hivemq.cloud:8884/mqtt";
+  const MQTT_USER = "unique";
+  const MQTT_PASS = "Petq1234";
+  // =====================
+
+  const names  = ["Кръг 1", "Кръг 2", "Кръг 3", "Кръг 4"];
+  const icons  = ["💡", "💡", "💡", "💡"];
+  const state  = [false, false, false, false];
+  let   client;
+
+  // Генерира картичките
+  const grid = document.getElementById("grid");
+  names.forEach((name, i) => {
+    grid.innerHTML += `
+      <div class="card" id="card${i}" onclick="toggle(${i})">
+        <div class="icon" id="icon${i}">${icons[i]}</div>
+        <div class="label">${name}</div>
+        <div class="toggle" id="tog${i}"></div>
+        <div class="state-text" id="txt${i}">ИЗК</div>
+      </div>`;
+  });
+
+  function updateUI(i) {
+    const on = state[i];
+    document.getElementById("card" + i).className = "card" + (on ? " on" : "");
+    document.getElementById("tog"  + i).className = "toggle" + (on ? " on" : "");
+    document.getElementById("txt"  + i).textContent = on ? "ВКЛ" : "ИЗК";
+  }
+
+  function publish(relay, val) {
+    if (client && client.connected) {
+      client.publish("home/relay/" + relay, val ? "1" : "0");
+    }
+  }
+
+  function toggle(i) {
+    state[i] = !state[i];
+    updateUI(i);
+    publish(i + 1, state[i]);
+  }
+
+  function allOn() {
+    state.forEach((_, i) => { state[i] = true; updateUI(i); publish(i + 1, true); });
+  }
+
+  function allOff() {
+    state.forEach((_, i) => { state[i] = false; updateUI(i); publish(i + 1, false); });
+  }
+
+  function setStatus(text, type) {
+    document.getElementById("status-text").textContent = text;
+    document.getElementById("dot").className = type;
+  }
+
+  // MQTT свързване
+  client = mqtt.connect(MQTT_URL, {
+    username: MQTT_USER,
+    password: MQTT_PASS,
+    clientId: "PWA_" + Math.random().toString(16).substr(2, 8),
+    reconnectPeriod: 3000
+  });
+
+  client.on("connect", () => {
+    setStatus("Свързан ✓", "ok");
+    // Абонира се за статусите на всички релета
+    for (let i = 1; i <= 4; i++) {
+      client.subscribe("home/relay/" + i + "/status");
+    }
+  });
+
+  client.on("message", (topic, message) => {
+    const parts = topic.split("/");
+    if (parts[2] === "status") {
+      const i = parseInt(parts[1]) - 1; // индекс 0-3 (от "home/relay/N/status")
+      // Коригиран парсинг - взима relay номера от правилния индекс
+      const relayNum = parseInt(topic.split("/")[2]) - 1;
+      // По-правилно:
+      const idx = parseInt(topic.replace("home/relay/","").replace("/status","")) - 1;
+      if (idx >= 0 && idx < 4) {
+        state[idx] = message.toString() === "1";
+        updateUI(idx);
+      }
+    }
+  });
+
+  client.on("reconnect", () => setStatus("Повторно свързване...", ""));
+  client.on("error",     () => setStatus("Грешка при свързване", "err"));
+  client.on("offline",   () => setStatus("Офлайн", "err"));
+</script>
+</body>
+</html>
